@@ -1,0 +1,2 @@
+name,relative_path,format,size,error,method,status,message,output,thumbnail_message,hat_output,hat_message,codeformer_message,final_output,final_message,jpeg_analysis,processed_at
+foto_ejemplo.jpg,ejemplos/foto_ejemplo.jpg,JPEG,245760,,NOMOS HAT-L + CodeFormer,partial,Ejemplo ficticio de resultado parcial,ejemplos/_partial/foto_ejemplo.png,,ejemplos/_portada/foto_ejemplo_cover_nomos8khat_4x.png,Portada generada localmente,Caras refinadas con CodeFormer,ejemplos/_final/foto_ejemplo_final.png,Composición final generada localmente,,2026-01-15T10:30:00

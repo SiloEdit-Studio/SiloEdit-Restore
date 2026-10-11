@@ -1,4 +1,4 @@
-# PixelRestore
+# SiloEdit Restore
 
 Aplicación de escritorio local para Windows que inspecciona imágenes por lotes e intenta recuperaciones conservadoras. Los archivos de origen nunca se modifican y las imágenes no se envían a servicios externos.
 
@@ -51,15 +51,19 @@ Para publicar los checkpoints en GitHub se requiere Git LFS: los archivos de HAT
 1. En **Escanear**, seleccioná una carpeta de origen y otra de destino, fuera del árbol de origen.
 2. Elegí si querés recorrer subcarpetas y qué extensiones incluir.
 3. Iniciá el análisis. Se puede pausar entre archivos o cancelar el lote.
-4. Revisá las salidas en **Resultados**, exportá el CSV o consultá el historial local.
+4. Revisá las salidas en **Resultados**, exportá el CSV o consultá el historial local. La vista previa prioriza la composición `_final`, luego la portada `_portada` y finalmente la recuperación parcial. El doble clic abre un visor integrado con zoom; desde allí también podés abrir la imagen con la aplicación predeterminada de Windows.
+
+El archivo [examples/informe_ejemplo.csv](examples/informe_ejemplo.csv) muestra el formato de exportación con datos completamente ficticios; no es un informe de un análisis real.
+
+Para mostrar una imagen al compartir el repositorio en GitHub, subí [assets/github/SiloEditRestore-social-preview.png](assets/github/SiloEditRestore-social-preview.png) desde **Settings → General → Social preview → Edit**. Está preparada en 1280 × 640 y solo cambia la vista previa de este repositorio; no cambia el avatar de la organización ni el icono de la aplicación.
 
 `fotos_originales_rotas/` conserva una imagen de ejemplo para probar el flujo; la aplicación no altera los originales de origen.
 
-Las imágenes válidas se informan, pero no se copian. Una imagen dañada puede producir una salida **Parcial** si Pillow logra decodificarla y la salida supera la validación. Los archivos sin salida validada se informan como no recuperables o con error. Las salidas existentes nunca se sobrescriben; se agrega un sufijo numérico.
+Las imágenes válidas se informan, pero no se copian. Una imagen dañada puede producir una salida **Parcial** si Pillow logra decodificarla y la salida supera la validación. Si solo se genera una portada, Resultados la identifica como **Portada generada**. Los archivos sin salida validada se informan como no recuperables o con error. Las salidas existentes nunca se sobrescriben; se agrega un sufijo numérico.
 
 ## Flujo compacto para JPEG dañado
 
-PixelRestore inspecciona los marcadores JPEG (SOI, APP/EXIF, DQT, DHT, SOF, SOS y EOI), localiza el escaneo e informa la geometría MCU y anomalías estructurales detectables. Esto no decodifica coeficientes DCT ni permite afirmar que los bloques puedan repararse.
+SiloEdit Restore inspecciona los marcadores JPEG (SOI, APP/EXIF, DQT, DHT, SOF, SOS y EOI), localiza el escaneo e informa la geometría MCU y anomalías estructurales detectables. Esto no decodifica coeficientes DCT ni permite afirmar que los bloques puedan repararse.
 
 Cuando detecta anomalías binarias y encuentra una miniatura EXIF utilizable, conserva:
 
@@ -70,26 +74,26 @@ La miniatura EXIF, la variante facial CodeFormer, la máscara, el híbrido base 
 
 El flujo activo queda reducido a una sola ampliación general: NOMOS HAT procesa la miniatura EXIF en una inferencia 4×. CodeFormer (fidelidad 0.7) procesa las caras detectadas en esa portada HAT; no se ejecutan x2Plus, doble pasada ni GFPGAN. Si CodeFormer falla, HAT sigue disponible como guía general para la composición. Si HAT falla, CodeFormer no se ejecuta porque no hay una portada ampliada de entrada. Los errores quedan visibles. El borde de la máscara se difumina con un radio de `max(8 px, lado menor / 24)` para hacer más gradual la mezcla.
 
-PixelRestore estima una máscara de regiones dañadas y compone allí la salida CodeFormer, que conserva la portada HAT como base general y refina las caras detectadas; fuera de la máscara mantiene la imagen decodificada. Si CodeFormer no genera una salida válida, usa HAT como guía. La máscara es heurística y puede marcar zonas grises auténticas. Todo detalle inferido por HAT/CodeFormer puede diferir del original; el fundido no reconstruye información ausente ni garantiza una unión invisible. Las salidas permanentes de IA son `_portada` y `_final`; los originales de origen nunca se modifican.
+SiloEdit Restore estima una máscara de regiones dañadas y compone allí la salida CodeFormer, que conserva la portada HAT como base general y refina las caras detectadas; fuera de la máscara mantiene la imagen decodificada. Si CodeFormer no genera una salida válida, usa HAT como guía. La máscara es heurística y puede marcar zonas grises auténticas. Todo detalle inferido por HAT/CodeFormer puede diferir del original; el fundido no reconstruye información ausente ni garantiza una unión invisible. Las salidas permanentes de IA son `_portada` y `_final`; los originales de origen nunca se modifican.
 
 ## Alcance y limitaciones
 
-La detección y composición se basan en heurísticas, no en reparación real MCU/DCT ni resincronización Huffman. PixelRestore no inserta, elimina ni desplaza MCUs. La miniatura EXIF es de baja resolución; la superresolución puede estimar textura plausible, pero no recuperar datos ausentes ni garantizar la apariencia original.
+La detección y composición se basan en heurísticas, no en reparación real MCU/DCT ni resincronización Huffman. SiloEdit Restore no inserta, elimina ni desplaza MCUs. La miniatura EXIF es de baja resolución; la superresolución puede estimar textura plausible, pero no recuperar datos ausentes ni garantizar la apariencia original.
 
 Formatos incluidos: JPG/JPEG, PNG, WEBP, BMP, TIFF y GIF. El historial SQLite guarda metadatos y filas de resultados, no imágenes; se almacena en `%LOCALAPPDATA%\PixelRestore`.
 
 ## Pruebas
 
-Con las dependencias instaladas, ejecutá `python -m pytest -q`. Las pruebas sintéticas comprueban el tratamiento de entradas dañadas, conservación de originales, uso de la portada como entrada del modelo y prevención de sobrescrituras.
+Con las dependencias instaladas, ejecutá `python -m pytest -q`. Las pruebas sintéticas comprueban el tratamiento de entradas dañadas, conservación de originales, uso de la portada como entrada del modelo, selección prioritaria de la composición final y prevención de sobrescrituras.
 
 ## Empaquetado para Windows
 
 ```powershell
 python -m pip install pyinstaller
-pyinstaller --noconfirm --windowed --name PixelRestore app.py
+pyinstaller --noconfirm --windowed --name "SiloEdit Restore" --icon assets\icons\SiloEditRestore.ico app.py
 ```
 
-El ejecutable queda en `dist\PixelRestore`. Probalo en una instalación limpia antes de distribuirlo.
+Esto genera una compilación inicial de la interfaz en `dist\SiloEdit Restore`; por sí sola no incluye el runtime aislado de IA ni los modelos. Prepará y probá esos componentes antes de distribuir una instalación completa.
 
 ## Licencia
 

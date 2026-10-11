@@ -268,7 +268,7 @@ def generar_informe_reparacion(
     """Create machine-readable evidence with explicit recovered/inferred provenance."""
     mcu = analysis.get("mcu") or {}
     return {
-        "format": "PixelRestore experimental JPEG report",
+        "format": "SiloEdit Restore experimental JPEG report",
         "binary_analysis": analysis,
         "image_analysis": mask_metadata or {},
         "outputs": output_paths or {},
