@@ -1,8 +1,12 @@
 """Restore aligned faces locally with the official CodeFormer architecture."""
-from pathlib import Path
+from contextlib import redirect_stdout
 import importlib
+import json
+import os
+from pathlib import Path
 import shutil
 import sys
+import traceback
 from types import ModuleType
 
 
@@ -50,76 +54,102 @@ def _install_local_face_models(
     return cache_root
 
 
-def main() -> int:
-    if len(sys.argv) != 5:
-        print("Usage: codeformer_runner.py input output checkpoint fidelity", file=sys.stderr)
-        return 2
+def _load_model(checkpoint: Path):
+    if not checkpoint.is_file():
+        raise FileNotFoundError(f"CodeFormer checkpoint does not exist: {checkpoint}")
+    import torch
+    import cv2
+    import numpy as np
+    from PIL import Image
 
-    source, destination, checkpoint = map(Path, sys.argv[1:4])
+    local_app_data = Path(
+        os.environ.get(
+            "LOCALAPPDATA",
+            str(Path.home() / "AppData" / "Local"),
+        )
+    )
+    cache_root = local_app_data / "PixelRestore" / "models" / "CodeFormer"
+    _prepare_official_architecture(cache_root)
+    _install_local_face_models(checkpoint.parent, cache_root)
+    from basicsr.utils import img2tensor, tensor2img
+    from facexlib.utils.face_restoration_helper import FaceRestoreHelper
+    from torchvision.transforms.functional import normalize
+    from basicsr.utils.registry import ARCH_REGISTRY
+
+    model = ARCH_REGISTRY.get("CodeFormer")(
+        dim_embd=512,
+        codebook_size=1024,
+        n_head=8,
+        n_layers=9,
+        connect_list=["32", "64", "128", "256"],
+    )
+    checkpoint_data = torch.load(
+        str(checkpoint),
+        map_location="cpu",
+        weights_only=True,
+    )
+    parameters = checkpoint_data.get("params_ema", checkpoint_data.get("params"))
+    if parameters is None:
+        raise ValueError("CodeFormer checkpoint must contain params_ema or params.")
+    model.load_state_dict(parameters, strict=True)
+    model.eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return {
+        "torch": torch,
+        "model": model,
+        "device": device,
+        "cache_root": cache_root,
+        "cv2": cv2,
+        "np": np,
+        "Image": Image,
+        "img2tensor": img2tensor,
+        "tensor2img": tensor2img,
+        "FaceRestoreHelper": FaceRestoreHelper,
+        "normalize": normalize,
+        "helper": None,
+    }
+
+
+def _process_image(source: Path, destination: Path, fidelity: float, runtime) -> str:
+    torch = runtime["torch"]
+    model = runtime["model"]
+    device = runtime["device"]
+    helper = runtime["helper"]
+    if not 0.0 <= fidelity <= 1.0:
+        raise ValueError(f"Fidelity must be between 0 and 1, got {fidelity}.")
+    if destination.exists():
+        raise FileExistsError(f"Refusing to overwrite existing output: {destination}")
+    if not source.is_file():
+        raise FileNotFoundError(f"Input image does not exist: {source}")
+
     try:
-        fidelity = float(sys.argv[4])
-        if not 0.0 <= fidelity <= 1.0:
-            raise ValueError(f"Fidelity must be between 0 and 1, got {fidelity}.")
-        if destination.exists():
-            raise FileExistsError(f"Refusing to overwrite existing output: {destination}")
-        if not source.is_file():
-            raise FileNotFoundError(f"Input image does not exist: {source}")
-        if not checkpoint.is_file():
-            raise FileNotFoundError(f"CodeFormer checkpoint does not exist: {checkpoint}")
+        model.to(device)
+        if helper is None:
+            helper = runtime["FaceRestoreHelper"](
+                upscale_factor=1,
+                face_size=512,
+                crop_ratio=(1, 1),
+                det_model="retinaface_mobile0.25",
+                save_ext="png",
+                use_parse=True,
+                device=torch.device("cpu"),
+                model_rootpath=str(runtime["cache_root"]),
+            )
+            runtime["helper"] = helper
+        helper.clean_all()
+        helper.device = device
+        helper.face_det.to(device)
+        helper.face_det.device = device
+        helper.face_det.mean_tensor = helper.face_det.mean_tensor.to(device)
+        helper.face_parse.to(device)
 
-        import cv2
-        import numpy as np
-        import torch
-        from PIL import Image
-
-        local_app_data = Path.home() / "AppData" / "Local"
-        import os
-
-        local_app_data = Path(
-            os.environ.get("LOCALAPPDATA", str(local_app_data))
-        )
-        cache_root = local_app_data / "PixelRestore" / "models" / "CodeFormer"
-        _prepare_official_architecture(cache_root)
-        _install_local_face_models(checkpoint.parent, cache_root)
-        from basicsr.utils import img2tensor, tensor2img
-        from basicsr.utils.registry import ARCH_REGISTRY
-        from torchvision.transforms.functional import normalize
-
-        model = ARCH_REGISTRY.get("CodeFormer")(
-            dim_embd=512,
-            codebook_size=1024,
-            n_head=8,
-            n_layers=9,
-            connect_list=["32", "64", "128", "256"],
-        )
-        checkpoint_data = torch.load(
-            str(checkpoint),
-            map_location="cpu",
-            weights_only=True,
-        )
-        parameters = checkpoint_data.get("params_ema", checkpoint_data.get("params"))
-        if parameters is None:
-            raise ValueError("CodeFormer checkpoint must contain params_ema or params.")
-        model.load_state_dict(parameters, strict=True)
-
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.eval().to(device)
+        cv2 = runtime["cv2"]
+        np = runtime["np"]
+        Image = runtime["Image"]
         image_bgr = cv2.imread(str(source), cv2.IMREAD_COLOR)
         if image_bgr is None:
             raise OSError(f"Could not decode input image: {source}")
 
-        from facexlib.utils.face_restoration_helper import FaceRestoreHelper
-
-        helper = FaceRestoreHelper(
-            upscale_factor=1,
-            face_size=512,
-            crop_ratio=(1, 1),
-            det_model="retinaface_mobile0.25",
-            save_ext="png",
-            use_parse=True,
-            device=device,
-            model_rootpath=str(cache_root),
-        )
         helper.read_image(image_bgr)
         face_count = helper.get_face_landmarks_5(
             only_center_face=False,
@@ -132,12 +162,12 @@ def main() -> int:
 
         with torch.inference_mode():
             for cropped_face in helper.cropped_faces:
-                face_tensor = img2tensor(
+                face_tensor = runtime["img2tensor"](
                     cropped_face.astype(np.float32) / 255.0,
                     bgr2rgb=True,
                     float32=True,
                 )
-                normalize(
+                runtime["normalize"](
                     face_tensor,
                     (0.5, 0.5, 0.5),
                     (0.5, 0.5, 0.5),
@@ -148,12 +178,13 @@ def main() -> int:
                     w=fidelity,
                     adain=True,
                 )[0]
-                restored_face = tensor2img(
+                restored_face = runtime["tensor2img"](
                     restored.squeeze(0),
                     rgb2bgr=True,
                     min_max=(-1, 1),
                 ).astype(np.uint8)
                 helper.add_restored_face(restored_face)
+                del restored, face_tensor
 
         helper.get_inverse_affine(None)
         result_bgr = helper.paste_faces_to_input_image(upsample_img=image_bgr)
@@ -163,12 +194,74 @@ def main() -> int:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("xb") as stream:
             Image.fromarray(result_rgb, "RGB").save(stream, format="PNG", optimize=True)
-        print(
+        return (
             f"CodeFormer restored {face_count} face(s) at fidelity {fidelity:.2f} "
             f"using {'CUDA' if device.type == 'cuda' else 'CPU'}."
         )
+    finally:
+        if device.type == "cuda":
+            if helper is not None:
+                helper.clean_all()
+                helper.face_det.to("cpu")
+                helper.face_det.device = torch.device("cpu")
+                helper.face_det.mean_tensor = helper.face_det.mean_tensor.to("cpu")
+                helper.face_parse.to("cpu")
+                helper.device = torch.device("cpu")
+            model.to("cpu")
+            torch.cuda.empty_cache()
+
+
+def _run_persistent(checkpoint: Path, fidelity: float) -> int:
+    protocol = sys.stdout
+    try:
+        with redirect_stdout(sys.stderr):
+            runtime = _load_model(checkpoint)
+        protocol.write(json.dumps({"ready": True}) + "\n")
+        protocol.flush()
+    except Exception as exc:
+        protocol.write(json.dumps({"ready": False, "error": f"{type(exc).__name__}: {exc}"}) + "\n")
+        protocol.flush()
+        return 1
+
+    for line in sys.stdin:
+        try:
+            request = json.loads(line)
+            source = Path(request["source"])
+            destination = Path(request["destination"])
+            with redirect_stdout(sys.stderr):
+                message = _process_image(source, destination, fidelity, runtime)
+            response = {"ok": True, "message": message}
+        except Exception as exc:
+            response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        protocol.write(json.dumps(response, ensure_ascii=False) + "\n")
+        protocol.flush()
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "--persistent":
+        try:
+            fidelity = float(sys.argv[3])
+            if not 0.0 <= fidelity <= 1.0:
+                raise ValueError(f"Fidelity must be between 0 and 1, got {fidelity}.")
+        except ValueError as exc:
+            print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        return _run_persistent(Path(sys.argv[2]), fidelity)
+    if len(sys.argv) != 5:
+        print("Usage: codeformer_runner.py input output checkpoint fidelity", file=sys.stderr)
+        return 2
+
+    source, destination, checkpoint = map(Path, sys.argv[1:4])
+    try:
+        fidelity = float(sys.argv[4])
+        if not 0.0 <= fidelity <= 1.0:
+            raise ValueError(f"Fidelity must be between 0 and 1, got {fidelity}.")
+        runtime = _load_model(checkpoint)
+        print(_process_image(source, destination, fidelity, runtime))
         return 0
     except Exception as exc:
+        traceback.print_exc(file=sys.stderr)
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 

@@ -450,22 +450,41 @@ def _run_local_upscaler(
         ) as temporary:
             temporary_path = Path(temporary.name)
         temporary_path.unlink()
-        completed = subprocess.run(
-            [
-                str(runtime_python), str(runner), str(source), str(temporary_path),
-                str(model_path), *runner_arguments,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
+        from .ai_runtime import run_persistent_inference
+
+        persistent_command = [
+            str(runtime_python), str(runner), "--persistent",
+            str(model_path), *runner_arguments,
+        ]
+        persistent_key = (
+            runner_name, str(runtime_python), str(runner), str(model_path), *runner_arguments
         )
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout).strip()
-            return "unavailable", (
-                f"{engine_name} no pudo completar la inferencia local"
-                + (f": {detail[-1200:]}" if detail else ".")
+        persistent_message = run_persistent_inference(
+            persistent_key,
+            persistent_command,
+            str(source),
+            str(temporary_path),
+        )
+        if persistent_message is None:
+            completed = subprocess.run(
+                [
+                    str(runtime_python), str(runner), str(source), str(temporary_path),
+                    str(model_path), *runner_arguments,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
             )
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout).strip()
+                return "unavailable", (
+                    f"{engine_name} no pudo completar la inferencia local"
+                    + (f": {detail[-1200:]}" if detail else ".")
+                )
+            inference_message = completed.stdout.strip()
+        else:
+            inference_message = persistent_message
         checked = validate_image(temporary_path)
         with Image.open(source) as original:
             expected_size = (original.width * scale, original.height * scale)
@@ -483,13 +502,17 @@ def _run_local_upscaler(
             destination.unlink(missing_ok=True)
             created_destination = False
             return "unavailable", f"La salida copiada de {model_name} no superó la validación final."
-        device = completed.stdout.strip() or "GPU/CUDA o CPU detectada por el runner"
+        device = inference_message or "GPU/CUDA o CPU detectada por el runner"
         return "reconstructed", (
             f"{model_name} local ×{scale} desde {original.width}×{original.height}; "
             f"salida {expected_size[0]}×{expected_size[1]}. La textura y el detalle fino son inferidos, "
             f"no recuperados. {device}"
         )
     except subprocess.TimeoutExpired:
+        if created_destination:
+            destination.unlink(missing_ok=True)
+        return "unavailable", f"La inferencia {engine_name} superó el límite de 10 minutos."
+    except TimeoutError:
         if created_destination:
             destination.unlink(missing_ok=True)
         return "unavailable", f"La inferencia {engine_name} superó el límite de 10 minutos."
@@ -563,17 +586,34 @@ def _run_local_face_restorer(
             temporary_path = Path(temporary.name)
         temporary_path.unlink()
 
-        completed = subprocess.run(
-            [
-                str(runtime_python), str(runner), str(source),
-                str(temporary_path), str(model_path), *runner_arguments,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
+        from .ai_runtime import run_persistent_inference
+
+        persistent_command = [
+            str(runtime_python), str(runner), "--persistent",
+            str(model_path), *runner_arguments,
+        ]
+        persistent_key = (
+            runner_name, str(runtime_python), str(runner), str(model_path), *runner_arguments
         )
-        if completed.returncode != 0:
+        persistent_message = run_persistent_inference(
+            persistent_key,
+            persistent_command,
+            str(source),
+            str(temporary_path),
+        )
+        completed = None
+        if persistent_message is None:
+            completed = subprocess.run(
+                [
+                    str(runtime_python), str(runner), str(source),
+                    str(temporary_path), str(model_path), *runner_arguments,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+        if completed is not None and completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
             return "unavailable", (
                 f"{model_name} no pudo restaurar una cara localmente"
@@ -596,10 +636,18 @@ def _run_local_face_restorer(
             destination.unlink(missing_ok=True)
             created_destination = False
             return "unavailable", f"La salida copiada de {model_name} no superó la validación final."
+        inference_message = (
+            persistent_message if persistent_message is not None
+            else completed.stdout.strip() if completed else ""
+        )
         return "reconstructed", (
-            completed.stdout.strip() or f"{model_name} restauró el rostro localmente."
+            inference_message or f"{model_name} restauró el rostro localmente."
         )
     except subprocess.TimeoutExpired:
+        if created_destination:
+            destination.unlink(missing_ok=True)
+        return "unavailable", f"{model_name} superó el límite de 10 minutos."
+    except TimeoutError:
         if created_destination:
             destination.unlink(missing_ok=True)
         return "unavailable", f"{model_name} superó el límite de 10 minutos."
