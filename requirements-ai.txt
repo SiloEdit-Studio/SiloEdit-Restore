@@ -1,0 +1,2 @@
+# OpenCV's DNN super-resolution module; EDSR x2/x3 weights download on first use.
+opencv-contrib-python>=4.10,<5
