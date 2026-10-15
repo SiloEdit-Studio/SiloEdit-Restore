@@ -55,8 +55,6 @@ Para publicar los checkpoints en GitHub se requiere Git LFS: los archivos de HAT
 
 El archivo [examples/informe_ejemplo.csv](examples/informe_ejemplo.csv) muestra el formato de exportación con datos completamente ficticios; no es un informe de un análisis real.
 
-Para mostrar una imagen al compartir el repositorio en GitHub, subí [assets/github/SiloEditRestore-social-preview.png](assets/github/SiloEditRestore-social-preview.png) desde **Settings → General → Social preview → Edit**. Está preparada en 1280 × 640 y solo cambia la vista previa de este repositorio; no cambia el avatar de la organización ni el icono de la aplicación.
-
 `fotos_originales_rotas/` conserva una imagen de ejemplo para probar el flujo; la aplicación no altera los originales de origen.
 
 Las imágenes válidas se informan, pero no se copian. Una imagen dañada puede producir una salida **Parcial** si Pillow logra decodificarla y la salida supera la validación. Si solo se genera una portada, Resultados la identifica como **Portada generada**. Los archivos sin salida validada se informan como no recuperables o con error. Las salidas existentes nunca se sobrescriben; se agrega un sufijo numérico.
